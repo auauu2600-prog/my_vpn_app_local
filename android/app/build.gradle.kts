@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -19,14 +20,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        
-        multiDexEnabled = true
-    }
-
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
     }
 
     buildTypes {
@@ -34,15 +27,6 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
-}
-
-// Блок kotlin должен быть снаружи android
-kotlin {
-    jvmToolchain(17)
-}
-
-dependencies {
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 }
 
 flutter {
