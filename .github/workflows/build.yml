@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clean Gradle Cache
+        run: rm -rf ~/.gradle/caches/transforms-*
+
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
