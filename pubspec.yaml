@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  v2ray_box: 1.0.4
+  v2ray_box: 1.0.3
   http: ^1.2.0
 
 dev_dependencies:
