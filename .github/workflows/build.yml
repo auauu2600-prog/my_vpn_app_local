@@ -11,9 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clean Gradle Cache
-        run: rm -rf ~/.gradle/caches/transforms-*
-
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
@@ -23,13 +20,14 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.27.3'  # <--- СТАБИЛЬНАЯ ВЕРСИЯ
           channel: 'stable'
           cache: true
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK (force bypass validation)
+      - name: Build APK
         run: flutter build apk --debug --android-skip-build-dependency-validation
 
       - name: Upload APK
