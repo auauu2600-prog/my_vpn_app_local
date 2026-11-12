@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:v2ray_box/v2ray_box.dart';
+import 'package:flutter_vless/flutter_vless.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -33,66 +33,55 @@ class VpnHomePage extends StatefulWidget {
 
 class _VpnHomePageState extends State<VpnHomePage> {
   final TextEditingController _subController = TextEditingController();
-  final V2rayBox _v2rayBox = V2rayBox();
+  late final FlutterVless _flutterVless;
 
-  bool isInitialized = false;
   bool isLoading = false;
   bool isConnected = false;
   bool isConnecting = false;
   String ping = '--- мс';
-  
-  // Добавлено слово final, как просил анализатор
-  final List<String> _serverLinks = [];
-  final List<String> _serverNames = [];
-  int _selectedIndex = 0;
+  List<FlutterVlessURL> _servers = [];
+  FlutterVlessURL? _selectedServer;
 
   @override
   void initState() {
     super.initState();
-    _initV2rayBox();
+    _flutterVless = FlutterVless(
+      onStatusChanged: (status) {
+        debugPrint('VPN Status: state=${status.state}');
+      },
+    );
+    _initVless();
   }
 
-  Future<void> _initV2rayBox() async {
+  Future<void> _initVless() async {
     try {
-      await _v2rayBox.initialize(
-        notificationStopButtonText: 'Отключить',
+      await _flutterVless.initializeVless(
+        providerBundleIdentifier: 'com.example.my_vpn_app',
+        groupIdentifier: 'group.com.example.my_vpn_app',
       );
-      setState(() => isInitialized = true);
-      debugPrint('V2rayBox инициализирован');
+      debugPrint('FlutterVless успешно инициализирован');
     } catch (e) {
-      debugPrint('Ошибка инициализации V2rayBox: $e');
+      debugPrint('Ошибка инициализации FlutterVless: $e');
     }
   }
 
   Future<void> loadSubscription() async {
-    String url = _subController.text.trim();
+    final url = _subController.text.trim();
     if (url.isEmpty) {
       _showError('Вставьте ссылку на подписку');
       return;
     }
 
-    if (url.startsWith('://')) {
-      url = 'https$url';
-    } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://$url';
-    }
-
     setState(() {
       isLoading = true;
-      _serverLinks.clear();
-      _serverNames.clear();
+      _servers.clear();
+      _selectedServer = null;
       isConnected = false;
       ping = '--- мс';
     });
 
     try {
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      );
-
+      final response = await http.get(Uri.parse(url));
       if (response.statusCode != 200) {
         throw Exception('Ошибка сервера: ${response.statusCode}');
       }
@@ -106,30 +95,15 @@ class _VpnHomePageState extends State<VpnHomePage> {
         }
       }
 
-      final lines = rawData.split('\n');
-      for (var line in lines) {
-        line = line.trim();
-        if (line.startsWith('vless://') || line.startsWith('vmess://') || line.startsWith('trojan://')) {
-          _serverLinks.add(line);
-          String name = 'Сервер ${_serverLinks.length}';
-          if (line.contains('#')) {
-            try {
-              name = Uri.decodeComponent(line.split('#').last);
-            } catch (_) {}
-          }
-          _serverNames.add(name);
-        }
-      }
-
-      if (_serverLinks.isEmpty) {
+      final parsedServers = FlutterVless.parseMany(rawData);
+      if (parsedServers.isEmpty) {
         throw Exception('В подписке не найдено серверов');
       }
 
       setState(() {
-        _selectedIndex = 0;
+        _servers = parsedServers;
+        _selectedServer = _servers.first;
       });
-      debugPrint('Загружено серверов: ${_serverLinks.length}');
-
     } catch (e) {
       _showError('Ошибка загрузки: $e');
     } finally {
@@ -138,12 +112,12 @@ class _VpnHomePageState extends State<VpnHomePage> {
   }
 
   Future<void> toggleConnection() async {
-    if (isConnecting || !isInitialized) return;
+    if (isConnecting) return;
 
     if (isConnected) {
       setState(() => isConnecting = true);
       try {
-        await _v2rayBox.disconnect();
+        await _flutterVless.stopVless();
         setState(() {
           isConnected = false;
           ping = '--- мс';
@@ -156,44 +130,72 @@ class _VpnHomePageState extends State<VpnHomePage> {
       return;
     }
 
-    if (_serverLinks.isEmpty) {
-      _showError('Сначала загрузите подписку');
+    if (_selectedServer == null) {
+      _showError('Сначала загрузите подписку и выберите сервер');
       return;
     }
 
     setState(() => isConnecting = true);
     try {
-      final link = _serverLinks[_selectedIndex];
-      final name = _serverNames[_selectedIndex];
-
-      final success = await _v2rayBox.connect(link, name: name);
-      if (success) {
-        setState(() {
-          isConnected = true;
-          ping = 'Считаем...';
-        });
-        checkPing();
-      } else {
-        _showError('Не удалось подключиться');
+      final rawConfig = _selectedServer!.getFullConfiguration();
+      Map<String, dynamic> configMap = jsonDecode(rawConfig);
+      
+      // --- ОЧИСТКА КОНФИГА ПЕРЕД ОТПРАВКОЙ ---
+      if (configMap['outbounds'] != null) {
+        for (var outbound in configMap['outbounds']) {
+          outbound.remove('mux');
+          if (outbound['streamSettings'] != null &&
+              outbound['streamSettings']['tlsSettings'] != null) {
+            outbound['streamSettings']['tlsSettings'].remove('alpn'); 
+          }
+        }
       }
-    } catch (e) {
+      if (configMap['inbounds'] != null) {
+        for (var inbound in configMap['inbounds']) {
+          inbound.remove('sniffing'); 
+        }
+      }
+      if (configMap['log'] != null) {
+        configMap['log']['loglevel'] = 'warning';
+      }
+      
+      final cleanedConfig = jsonEncode(configMap);
+
+      final permissionGranted = await _flutterVless.requestPermission();
+      if (!permissionGranted) {
+        _showError('Вы отклонили запрос на создание VPN');
+        return;
+      }
+
+      await _flutterVless.startVless(
+        remark: _selectedServer!.remark,
+        config: cleanedConfig,
+      );
+
+      setState(() {
+        isConnected = true;
+        ping = 'Считаем...';
+      });
+      checkPing();
+    } catch (e, stackTrace) {
       debugPrint('Ошибка подключения: $e');
-      _showError('Ошибка подключения: $e');
+      _showError('Ошибка подключения. Подробности в консоли.');
     } finally {
       setState(() => isConnecting = false);
     }
   }
 
   Future<void> checkPing() async {
-    if (_serverLinks.isEmpty) return;
+    if (_selectedServer == null) return;
     setState(() => ping = 'Замер...');
     try {
-      final link = _serverLinks[_selectedIndex];
-      final delay = await _v2rayBox.ping(link, timeout: 5000);
-      setState(() => ping = delay == -1 ? 'Ошибка' : '$delay мс');
+      final delay = await _flutterVless.getServerDelay(
+        config: _selectedServer!.getFullConfiguration(),
+        url: 'https://google.com/generate_204',
+      );
+      setState(() => ping = '$delay мс');
     } catch (e) {
-      setState(() => ping = 'Ошибка');
-      debugPrint('Ошибка пинга: $e');
+      setState(() => ping = 'Сервер мертв');
     }
   }
 
@@ -205,10 +207,6 @@ class _VpnHomePageState extends State<VpnHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (!isInitialized) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Мой VPN Клиент'),
@@ -240,21 +238,26 @@ class _VpnHomePageState extends State<VpnHomePage> {
             ),
             const SizedBox(height: 20),
             Expanded(
-              child: _serverLinks.isEmpty
+              child: _servers.isEmpty
                   ? const Center(child: Text('Вставьте ссылку и нажмите "Загрузить"'))
                   : ListView.builder(
-                      itemCount: _serverLinks.length,
+                      itemCount: _servers.length,
                       itemBuilder: (context, index) {
-                        final isSelected = _selectedIndex == index;
+                        final server = _servers[index];
+                        final isSelected = _selectedServer == server;
                         return Card(
                           color: isSelected ? Colors.deepPurple.shade50 : null,
                           child: ListTile(
                             leading: Icon(Icons.dns, color: isSelected ? Colors.deepPurple : Colors.grey),
-                            title: Text(_serverNames[index], style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                            title: Text(
+                              server.remark.isNotEmpty ? server.remark : 'Сервер ${index + 1}',
+                              style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal),
+                            ),
+                            subtitle: Text('${server.network} • ${server.address}'),
                             trailing: isSelected ? const Icon(Icons.check_circle, color: Colors.green) : null,
                             onTap: () {
                               setState(() {
-                                _selectedIndex = index;
+                                _selectedServer = server;
                               });
                             },
                           ),
@@ -265,7 +268,11 @@ class _VpnHomePageState extends State<VpnHomePage> {
             const SizedBox(height: 10),
             Text(
               isConnected ? 'Пинг: $ping' : 'Пинг: --- мс',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: isConnected && ping.contains('мс') ? Colors.green : Colors.grey),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: isConnected && ping.contains('мс') ? Colors.green : Colors.grey,
+              ),
             ),
             const SizedBox(height: 10),
             GestureDetector(
