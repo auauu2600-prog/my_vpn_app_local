@@ -246,7 +246,7 @@ class _VpnHomePageState extends State<VpnHomePage> {
                         final server = _servers[index];
                         final isSelected = _selectedServer == server;
                         return Card(
-                          color: isSelected ? Colors.deepPurple.shade50 : null,
+                          color: isConnected ? Colors.green.withOpacity(0.5) : Colors.black12,
                           child: ListTile(
                             leading: Icon(Icons.dns, color: isSelected ? Colors.deepPurple : Colors.grey),
                             title: Text(
